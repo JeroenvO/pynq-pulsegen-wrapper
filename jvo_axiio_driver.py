@@ -1,13 +1,13 @@
 #!/bin/python3
 from pynq import Overlay
-from math import log2
+from math import log2, floor
 
 REG_MAX_COUNT = 41
 REG_IO_INIT = 40
 ADDR_OFFSET = 4
 CLOCK_PERIOD = 8e-9
 NUM_OUTPUT = 20  # number of used IO ports
-
+NUM_CHANNELS = 10
 
 class JvoAxiioDriver:
     def __init__(self,
@@ -23,6 +23,7 @@ class JvoAxiioDriver:
         :param value: value to write as int
         :return:
         """
+        print('{} to {}'.format(ADDR_OFFSET*reg, value))
         self.io.write(ADDR_OFFSET * reg, value)
 
     def set_reprate_seconds(self, seconds: float):
@@ -69,13 +70,13 @@ class JvoAxiioDriver:
         """
         Set start and stop time of output by number of cycles
 
-        :param output: number of output as str 1a, 1b, 1c etc.
+        :param output: number of output as str 1a, 1b, 2a etc.
         :param start:
         :param stop:
         :return:
         """
-        io_num = 4 * (int(output[0]) - 1)
-        io_offset = 1 if output[1] == 'b' else 0
+        io_num = 4 * (int(output[:-1]) - 1)  # all but last char should be numeric
+        io_offset = 2 if output[-1] == 'b' else 0
 
         # if output > NUM_OUTPUT - 1 or output < 0:
         #     raise Exception('This output is not available. Please use outputs in range 0 to {}'.format(NUM_OUTPUT))
@@ -87,8 +88,8 @@ class JvoAxiioDriver:
             raise Exception('Stop number should be larger than start number.')
         if stop == start:
             raise Exception('Stop number should not be equal to start number.')
-        self.write_reg(io_num + io_offset, start)
-        self.write_reg(io_num + io_offset + 1, stop)
+        self.write_reg(io_num + io_offset, stop)
+        self.write_reg(io_num + io_offset + 1, start)
 
     def set_output_seconds(self, output: str, start: float, stop: float):
         """
@@ -102,3 +103,26 @@ class JvoAxiioDriver:
         num_cycles_stop = round(stop / CLOCK_PERIOD)
         print('Setting start to {} and stop to {} cycles'.format(num_cycles_start, num_cycles_stop))
         self.set_output_cycles(output, num_cycles_start, num_cycles_stop)
+
+    def loop_light(self, seconds: float):
+        """
+        Make a loop light effect
+        :param seconds:
+        :return:
+        """
+        time_per_led = seconds / NUM_CHANNELS
+        for i in range(0, NUM_CHANNELS):
+            self.set_output_seconds('{}a'.format(i+1), i * time_per_led, i * time_per_led + time_per_led)
+            self.set_output_seconds('{}b'.format(i+1), i * time_per_led, i * time_per_led + time_per_led)
+
+    def progress_bar(self, seconds: float):
+        """
+        Progress bar effect
+
+        :param seconds:
+        :return:
+        """
+        time_per_led = seconds / NUM_CHANNELS
+        for i in range(0, NUM_CHANNELS):
+            self.set_output_seconds('{}a'.format(i + 1), i * time_per_led, seconds)
+            self.set_output_seconds('{}b'.format(i + 1), i * time_per_led, seconds)
