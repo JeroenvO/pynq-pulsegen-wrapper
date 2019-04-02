@@ -65,17 +65,20 @@ class JvoAxiioDriver:
             raise Exception('String should consist of only 1 and 0.')
         self.write_reg(REG_IO_INIT, initial_num)
 
-    def set_output_cycles(self, output: int, start: int, stop: int):
+    def set_output_cycles(self, output: str, start: int, stop: int):
         """
         Set start and stop time of output by number of cycles
 
-        :param output: number of output in range 0 to NUM_OUTPUT
+        :param output: number of output as str 1a, 1b, 1c etc.
         :param start:
         :param stop:
         :return:
         """
-        if output > NUM_OUTPUT - 1 or output < 0:
-            raise Exception('This output is not available. Please use outputs in range 0 to {}'.format(NUM_OUTPUT))
+        io_num = 4 * (int(output[0]) - 1)
+        io_offset = 1 if output[1] == 'b' else 0
+
+        # if output > NUM_OUTPUT - 1 or output < 0:
+        #     raise Exception('This output is not available. Please use outputs in range 0 to {}'.format(NUM_OUTPUT))
         if start > self.reprate_cycles:
             raise Exception('Start number is larger than rep. rate. This is not possible.')
         if stop > self.reprate_cycles:
@@ -84,10 +87,10 @@ class JvoAxiioDriver:
             raise Exception('Stop number should be larger than start number.')
         if stop == start:
             raise Exception('Stop number should not be equal to start number.')
-        self.write_reg(ADDR_OFFSET * output, start)
-        self.write_reg(ADDR_OFFSET * 2 * output, stop)
+        self.write_reg(io_num + io_offset, start)
+        self.write_reg(io_num + io_offset + 1, stop)
 
-    def set_output_seconds(self, output: int, start: float, stop: float):
+    def set_output_seconds(self, output: str, start: float, stop: float):
         """
         Set the start and stop time for an output
 
