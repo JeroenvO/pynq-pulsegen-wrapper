@@ -143,8 +143,8 @@ class JvoAxiioDriver:
         :return:
         """
 
-        self.set_io_init('10101010101010101010')
+        self.set_io_init('1'*20)
         self.set_reprate_seconds(rep_rate)
         for i in range(0, NUM_CHANNELS):
             self.set_output_seconds('{}a'.format(i + 1), rep_rate-pulse_length, rep_rate)
-            self.set_output_seconds('{}b'.format(i + 1), 0, rep_rate-dead_time-pulse_length)
+            self.set_output_seconds('{}b'.format(i + 1), dead_time, rep_rate-dead_time)
