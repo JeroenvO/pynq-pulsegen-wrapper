@@ -24,7 +24,8 @@ class JvoAxiioDriver:
         :param value: value to write as int
         :return:
         """
-        print('{} to {}'.format(ADDR_OFFSET * reg, value))
+        if reg > 41:
+            raise Exception('This reg is not available, maximum reg number is 41.')
         self.io.write(ADDR_OFFSET * reg, value)
 
     def set_reprate_seconds(self, seconds: float):
@@ -78,9 +79,6 @@ class JvoAxiioDriver:
         """
         io_num = 4 * (int(output[:-1]) - 1)  # all but last char should be numeric
         io_offset = 2 if output[-1] == 'b' else 0
-
-        # if output > NUM_OUTPUT - 1 or output < 0:
-        #     raise Exception('This output is not available. Please use outputs in range 0 to {}'.format(NUM_OUTPUT))
         if start > self.reprate_cycles:
             raise Exception('Start number is larger than rep. rate. This is not possible.')
         if stop > self.reprate_cycles:
@@ -102,7 +100,7 @@ class JvoAxiioDriver:
         """
         num_cycles_start = round(start / CLOCK_PERIOD)
         num_cycles_stop = round(stop / CLOCK_PERIOD)
-        print('Setting start to {} and stop to {} cycles'.format(num_cycles_start, num_cycles_stop))
+        # print('Setting start to {} and stop to {} cycles'.format(num_cycles_start, num_cycles_stop))
         self.set_output_cycles(output, num_cycles_start, num_cycles_stop)
 
     def loop_light(self, seconds: float, reverse: bool = False):
@@ -134,3 +132,19 @@ class JvoAxiioDriver:
         for i in range(0, NUM_CHANNELS):
             self.set_output_seconds('{}a'.format(i + 1), i * time_per_led, seconds)
             self.set_output_seconds('{}b'.format(i + 1), i * time_per_led, seconds)
+
+    def marx_gen(self, pulse_length, dead_time, rep_rate):
+        """
+        10-stage solid state marx generator control with pulse signals on 'a' and charge signals on 'b'
+
+        :param pulse_length:
+        :param dead_time:
+        :param rep_rate:
+        :return:
+        """
+
+        self.set_io_init('10101010101010101010')
+        self.set_reprate_seconds(rep_rate)
+        for i in range(0, NUM_CHANNELS):
+            self.set_output_seconds('{}a'.format(i + 1), rep_rate-pulse_length, rep_rate)
+            self.set_output_seconds('{}b'.format(i + 1), 0, rep_rate-dead_time-pulse_length)
