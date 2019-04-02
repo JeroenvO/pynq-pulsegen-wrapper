@@ -9,9 +9,10 @@ CLOCK_PERIOD = 8e-9
 NUM_OUTPUT = 20  # number of used IO ports
 NUM_CHANNELS = 10
 
+
 class JvoAxiioDriver:
     def __init__(self,
-                 bitfile='/home/xilinx/pynq/overlays/jvo6-axiio/axiio1_16.bit',
+                 bitfile='/home/xilinx/pynq/overlays/jvo6-axiio/axiio1_19.bit',
                  axiinput='jvo_axiinput_0'):
         overlay = Overlay(bitfile)
         self.io = getattr(overlay, axiinput)
@@ -23,7 +24,7 @@ class JvoAxiioDriver:
         :param value: value to write as int
         :return:
         """
-        print('{} to {}'.format(ADDR_OFFSET*reg, value))
+        print('{} to {}'.format(ADDR_OFFSET * reg, value))
         self.io.write(ADDR_OFFSET * reg, value)
 
     def set_reprate_seconds(self, seconds: float):
@@ -104,24 +105,31 @@ class JvoAxiioDriver:
         print('Setting start to {} and stop to {} cycles'.format(num_cycles_start, num_cycles_stop))
         self.set_output_cycles(output, num_cycles_start, num_cycles_stop)
 
-    def loop_light(self, seconds: float):
+    def loop_light(self, seconds: float, reverse: bool = False):
         """
         Make a loop light effect
         :param seconds:
+        :param reverse: Change polarity
         :return:
         """
+        self.set_io_init(NUM_OUTPUT * str(int(not reverse)))
+
+        self.set_reprate_seconds(seconds)
         time_per_led = seconds / NUM_CHANNELS
         for i in range(0, NUM_CHANNELS):
-            self.set_output_seconds('{}a'.format(i+1), i * time_per_led, i * time_per_led + time_per_led)
-            self.set_output_seconds('{}b'.format(i+1), i * time_per_led, i * time_per_led + time_per_led)
+            self.set_output_seconds('{}a'.format(i + 1), i * time_per_led, i * time_per_led + time_per_led)
+            self.set_output_seconds('{}b'.format(i + 1), i * time_per_led, i * time_per_led + time_per_led)
 
-    def progress_bar(self, seconds: float):
+    def progress_bar(self, seconds: float, reverse: bool = False):
         """
         Progress bar effect
 
         :param seconds:
+        :param reverse: Change polarity
         :return:
         """
+        self.set_io_init(NUM_OUTPUT * str(int(not reverse)))
+        self.set_reprate_seconds(seconds)
         time_per_led = seconds / NUM_CHANNELS
         for i in range(0, NUM_CHANNELS):
             self.set_output_seconds('{}a'.format(i + 1), i * time_per_led, seconds)
