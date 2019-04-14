@@ -217,7 +217,7 @@ class JvoAxiioDriver:
                 plot_list.append([[0, rep_rate_cycles], [io_init, io_init]])
 
             else:
-                plot_list.append([[0, num_cycles_start, num_cycles_stop, rep_rate_cycles], [io_init, io_init, not io_init, io_init]])
+                plot_list.append([[0, output[0], output[1], rep_rate], [io_init, io_init, not io_init, io_init]])
 
         # plot channels
         fig, axs = plt.subplots(len(plot_list)+1, 1, sharex=True, sharey=True)
@@ -233,11 +233,11 @@ class JvoAxiioDriver:
         table_list.append(['Charge', charge_start, charge_stop])
 
         # plot charge
-        axs[len(plot_list)].step([0, charge_start, charge_stop, rep_rate_cycles], [io_init, io_init, not io_init, io_init])
+        axs[len(plot_list)].step([0, dead_time, first-dead_time, rep_rate], [io_init, io_init, not io_init, io_init])
         axs[len(plot_list)].set_ylabel('crg')
 
         # set plot
-        plt.xlim([first_cycles-2*dead_time_cycles, rep_rate_cycles])
+        plt.xlim([first-2*dead_time, rep_rate])
         fig.show()
 
         pprint(table_list)
