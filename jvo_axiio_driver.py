@@ -1,8 +1,14 @@
 #!/bin/python3
-from pynq import Overlay
-from math import log2, floor, ceil
-from typing import Sequence
-import nbwavedrom
+from math import log2
+
+from matplotlib import pyplot as plt
+from pprint import pprint
+
+try:
+    from pynq import Overlay
+except ImportError:
+    print('Running without PYNQ!')
+    pass
 
 REG_MAX_COUNT = 41
 REG_IO_INIT = 40
@@ -17,8 +23,14 @@ class JvoAxiioDriver:
     def __init__(self,
                  bitfile='/home/xilinx/pynq/overlays/jvo6-axiio/axiio1_19.bit',
                  axiinput='jvo_axiinput_0'):
-        overlay = Overlay(bitfile)
-        self.io = getattr(overlay, axiinput)
+        try:
+            overlay = Overlay(bitfile)
+            self.io = getattr(overlay, axiinput)
+        except NameError:
+            print('Running without PYNQ!')
+            pass
+        print('initialization complete!')
+        self.rep_rate_cycles = -1
 
     def write_reg(self, reg: int, value: int):
         """
@@ -31,7 +43,7 @@ class JvoAxiioDriver:
             raise Exception('This reg is not available, maximum reg number is 41.')
         self.io.write(ADDR_OFFSET * reg, value)
 
-    def set_reprate_seconds(self, seconds: float):
+    def set_rep_rate_seconds(self, seconds: float):
         """
         Set reprate in seconds
         :param seconds: reprate
@@ -43,15 +55,15 @@ class JvoAxiioDriver:
         if log2(num_cycles) > 32:
             max_reprate = (2 ** 32 - 1) * CLOCK_PERIOD
             raise Exception('Number too large, maximum length is {} seconds.'.format(max_reprate))
-        self.set_reprate_cycles(num_cycles)
+        self.set_rep_rate_cycles(num_cycles)
 
-    def set_reprate_cycles(self, num_cycles: int):
+    def set_rep_rate_cycles(self, num_cycles: int):
         """
         Set reprate as number of cycles
         :param num_cycles:
         :return:
         """
-        self.reprate_cycles = num_cycles
+        self.rep_rate_cycles = num_cycles
         self.write_reg(REG_MAX_COUNT, num_cycles)
 
     def set_io_init(self, initial: str):
@@ -71,6 +83,33 @@ class JvoAxiioDriver:
             raise Exception('String should consist of only 1 and 0.')
         self.write_reg(REG_IO_INIT, initial_num)
 
+    def check_output_cycles(self, start: int, stop: int, rep_rate: int = 0):
+        """
+        Check if a number of cycles for an output is a valid value
+
+        :param start: num cycles start time
+        :param stop: num cycles stop time
+        :param rep_rate: num cycles in reprate
+        :return:
+        """
+        if rep_rate < 0:
+            if self.rep_rate_cycles > 0:
+                rep_rate = self.rep_rate_cycles
+            else:
+                raise Exception('Invalid rep rate!')
+        if stop > rep_rate and start > rep_rate:
+            return False
+        else:
+            if start > rep_rate:
+                raise Exception('Start number is larger than rep. rate. This is not possible.')
+            if stop > rep_rate:
+                raise Exception('Stop number is larger than rep. rate. This is not possible.')
+            if stop < start:
+                raise Exception('Stop number should be larger than start number.')
+            if stop == start:
+                raise Exception('Stop number should not be equal to start number.')
+        return True
+
     def set_output_cycles(self, output: str, start: int, stop: int):
         """
         Set start and stop time of output by number of cycles
@@ -82,17 +121,8 @@ class JvoAxiioDriver:
         """
         io_num = 4 * (int(output[:-1]) - 1)  # all but last char should be numeric
         io_offset = 2 if output[-1] == 'b' else 0
-        if stop > self.reprate_cycles and start > self.reprate_cycles:
+        if not self.check_output_cycles(start, stop):
             print('output {} is disabled'.format(output))
-        else:
-            if start > self.reprate_cycles:
-                raise Exception('Start number is larger than rep. rate. This is not possible.')
-            if stop > self.reprate_cycles:
-                raise Exception('Stop number is larger than rep. rate. This is not possible.')
-            if stop < start:
-                raise Exception('Stop number should be larger than start number.')
-            if stop == start:
-                raise Exception('Stop number should not be equal to start number.')
         self.write_reg(io_num + io_offset, stop)
         self.write_reg(io_num + io_offset + 1, start)
 
@@ -118,7 +148,7 @@ class JvoAxiioDriver:
         """
         self.set_io_init(NUM_OUTPUT * str(int(not reverse)))
 
-        self.set_reprate_seconds(seconds)
+        self.set_rep_rate_seconds(seconds)
         time_per_led = seconds / NUM_CHANNELS
         for i in range(0, NUM_CHANNELS):
             self.set_output_seconds('{}a'.format(i + 1), i * time_per_led, i * time_per_led + time_per_led)
@@ -133,7 +163,7 @@ class JvoAxiioDriver:
         :return:
         """
         self.set_io_init(NUM_OUTPUT * str(int(not reverse)))
-        self.set_reprate_seconds(seconds)
+        self.set_rep_rate_seconds(seconds)
         time_per_led = seconds / NUM_CHANNELS
         for i in range(0, NUM_CHANNELS):
             self.set_output_seconds('{}a'.format(i + 1), i * time_per_led, seconds)
@@ -147,13 +177,17 @@ class JvoAxiioDriver:
         :param rep_rate: repetition rate of cycli.
         :return:
         """
+        plot_list = []
+        table_list = []
+        io_init = 0  # initial value of all signals
         first = 0
         min_width = rep_rate
         if len(channels) > NUM_CHANNELS:
             raise Exception('{} channels defined, where {} is max'.format(len(channels), NUM_CHANNELS))
         # check values and find charge bounds
+        reprate_cycles = round(rep_rate / CLOCK_PERIOD)
         for i, output in enumerate(channels):
-            width = output[1]-output[0]
+            width = output[1] - output[0]
             if width < min_width:
                 min_width = width
             if min_width < CLOCK_PERIOD:
@@ -169,15 +203,27 @@ class JvoAxiioDriver:
             if dead_time < DEAD_TIME_MIN:
                 raise Exception('Dead time {} is shorter than minimum of {}'.format(dead_time, DEAD_TIME_MIN))
 
-        # make wavedrom
-        signals = []
-        for i, output in enumerate(channels):
-            signals.append({'name': 'stage_{}'.format(i+1), 'wave':'0'+'.'*floor(dead_time/min_width)+'1'+'.'*floor((output[1]-output[0])/min_width)+'0'})
+            num_cycles_start = round(output[0] / CLOCK_PERIOD)
+            num_cycles_stop = round(output[1] / CLOCK_PERIOD)
+            table_list.append([num_cycles_start, num_cycles_stop])
+            if not self.check_output_cycles(num_cycles_start, num_cycles_stop, reprate_cycles):
+                print('output {} is disabled'.format(i + 1))
+            plot_list.append([[0, num_cycles_start, num_cycles_stop, reprate_cycles], [io_init, io_init, not io_init, io_init]])
 
-        self.wd = { 'signal': signals}
+        # plot
+        fig, axs = plt.subplots(len(plot_list)+1, 1, sharex=True, sharey=True)
+        for i, plot in enumerate(plot_list):
+            axs[i].step(plot[0], plot[1])
 
-        nbwavedrom.draw(self.wd)
+        plt.xlim([0, reprate_cycles])
+        fig.show()
 
+        pprint(table_list)
+        print(table_list)
+        # apply
+        if hasattr(self, 'io'):  # if running with pynq
+            self.set_io_init(str(io_init) * 20)
+            self.set_rep_rate_cycles(reprate_cycles)
 
     def marx_sync(self, pulse_length: float, dead_time: float, rep_rate: float):
         """
@@ -189,13 +235,7 @@ class JvoAxiioDriver:
         :return:
         """
 
-        self.set_io_init('0' * 20)
-        self.set_reprate_seconds(rep_rate)
         channels = []
         for i in range(0, NUM_CHANNELS):
             channels.append([rep_rate - pulse_length, rep_rate])
-            # channels['{}b'.format(i + 1)] = [dead_time, rep_rate - dead_time]
-        # marx_check_run(channels)
         self._make_marx(channels, dead_time, rep_rate)
-        # self.set_output_seconds('{}a'.format(i + 1), rep_rate-pulse_length, rep_rate)
-        # self.set_output_seconds('{}b'.format(i + 1), )
