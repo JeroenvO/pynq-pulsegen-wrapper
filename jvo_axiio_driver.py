@@ -177,53 +177,79 @@ class JvoAxiioDriver:
         :param rep_rate: repetition rate of cycli.
         :return:
         """
+        assert NUM_OUTPUT / 2 == NUM_CHANNELS, 'Each channel should have 2 outputs.'
         plot_list = []
         table_list = []
+        channel_list = []
         io_init = 0  # initial value of all signals
-        first = 0
+        first = rep_rate
         min_width = rep_rate
         if len(channels) > NUM_CHANNELS:
             raise Exception('{} channels defined, where {} is max'.format(len(channels), NUM_CHANNELS))
         # check values and find charge bounds
-        reprate_cycles = round(rep_rate / CLOCK_PERIOD)
+        rep_rate_cycles = round(rep_rate / CLOCK_PERIOD)
+        dead_time_cycles = round(dead_time / CLOCK_PERIOD)
+        if dead_time < DEAD_TIME_MIN:
+            raise Exception('Dead time {} is shorter than minimum of {}'.format(dead_time, DEAD_TIME_MIN))
+
         for i, output in enumerate(channels):
-            width = output[1] - output[0]
-            if width < min_width:
-                min_width = width
-            if min_width < CLOCK_PERIOD:
-                raise Exception('Min width of {} is smaller than clock period {}'.format(min_width, CLOCK_PERIOD))
-            if output[0] < first:
-                first = output[0]
-            if output[1] > rep_rate and output[0] < rep_rate:  # only if channel is not disabled.
-                raise Exception('Last value of channel {} is larger than rep_rate {}'.format(i, rep_rate))
-            if output[0] < rep_rate / 2:
-                raise Exception('First value of channel {} is before half cycle, this gives too little time to charge'.format(i))
-            if output[1] < output[0]:
-                raise Exception('Start cannot be after end time for channel {}'.format(i))
-            if dead_time < DEAD_TIME_MIN:
-                raise Exception('Dead time {} is shorter than minimum of {}'.format(dead_time, DEAD_TIME_MIN))
+            if output[0] <= rep_rate and output[1] <= rep_rate:  # not disabled
+                width = output[1] - output[0]
+                if width < min_width:
+                    min_width = width
+                if min_width < CLOCK_PERIOD:
+                    raise Exception('Min width of {} is smaller than clock period {} for channel {}'.format(min_width, CLOCK_PERIOD, i+1))
+                if output[0] < first:
+                    first = output[0]
+                if output[1] > rep_rate and output[0] < rep_rate:  # only if channel is not disabled.
+                    raise Exception('Last value of channel {} is larger than rep_rate {}'.format(i+1, rep_rate))
+                if output[0] < rep_rate / 2:
+                    raise Exception('First value of channel {} is before half cycle, this gives too little time to charge'.format(i+1))
+                if output[1] < output[0]:
+                    raise Exception('Start cannot be after end time for channel {}'.format(i+1))
 
             num_cycles_start = round(output[0] / CLOCK_PERIOD)
             num_cycles_stop = round(output[1] / CLOCK_PERIOD)
-            table_list.append([num_cycles_start, num_cycles_stop])
-            if not self.check_output_cycles(num_cycles_start, num_cycles_stop, reprate_cycles):
+            table_list.append(['Channel_{}a'.format(i + 1), num_cycles_start, num_cycles_stop])
+            channel_list.append([num_cycles_start, num_cycles_stop])
+            if not self.check_output_cycles(num_cycles_start, num_cycles_stop, rep_rate_cycles):
                 print('output {} is disabled'.format(i + 1))
-            plot_list.append([[0, num_cycles_start, num_cycles_stop, reprate_cycles], [io_init, io_init, not io_init, io_init]])
+                plot_list.append([[0, rep_rate_cycles], [io_init, io_init]])
 
-        # plot
+            else:
+                plot_list.append([[0, num_cycles_start, num_cycles_stop, rep_rate_cycles], [io_init, io_init, not io_init, io_init]])
+
+        # plot channels
         fig, axs = plt.subplots(len(plot_list)+1, 1, sharex=True, sharey=True)
         for i, plot in enumerate(plot_list):
             axs[i].step(plot[0], plot[1])
+            axs[i].set_ylabel('{}a'.format(i+1))
 
-        plt.xlim([0, reprate_cycles])
+        # charge pulse
+        first_cycles = round(first / CLOCK_PERIOD)
+        print(first_cycles, dead_time_cycles)
+        charge_start = dead_time_cycles
+        charge_stop = first_cycles - dead_time_cycles
+        table_list.append(['Charge', charge_start, charge_stop])
+
+        # plot charge
+        axs[len(plot_list)].step([0, charge_start, charge_stop, rep_rate_cycles], [io_init, io_init, not io_init, io_init])
+        axs[len(plot_list)].set_ylabel('crg')
+
+        # set plot
+        plt.xlim([first_cycles-2*dead_time_cycles, rep_rate_cycles])
         fig.show()
 
         pprint(table_list)
-        print(table_list)
         # apply
         if hasattr(self, 'io'):  # if running with pynq
             self.set_io_init(str(io_init) * 20)
-            self.set_rep_rate_cycles(reprate_cycles)
+            self.set_rep_rate_cycles(rep_rate_cycles)
+            assert len(channel_list) == NUM_OUTPUT, 'Not all channels are defined!'
+            for i, channel in enumerate(channel_list):
+                self.set_output_cycles('{}a'.format(i + 1), channel[0], channel[1])
+                self.set_output_cycles('{}b'.format(i + 1), charge_start, charge_stop)
+            print('Apply finished!')
 
     def marx_sync(self, pulse_length: float, dead_time: float, rep_rate: float):
         """
@@ -234,8 +260,49 @@ class JvoAxiioDriver:
         :param rep_rate:
         :return:
         """
-
         channels = []
         for i in range(0, NUM_CHANNELS):
             channels.append([rep_rate - pulse_length, rep_rate])
+        self._make_marx(channels, dead_time, rep_rate)
+
+    def marx_delta(self, shortest_length: float, dead_time: float, rep_rate: float, num_channels: int = NUM_CHANNELS):
+        """
+        Make delta shaped wave
+
+        :param shortest_length:
+        :param dead_time:
+        :param rep_rate:
+        :param num_channels:
+        :return:
+        """
+        channels = []
+        change = shortest_length / 2
+        for i in range(0, num_channels):
+            j = num_channels - i
+            start = rep_rate - change * i - shortest_length * num_channels
+            stop = rep_rate - change * (j - 1)
+            print(i, j, start, stop)
+            channels.append([start, stop])
+        for i in range(num_channels, NUM_CHANNELS):
+            channels.append([rep_rate*2, rep_rate*2])  # disable outputs
+        self._make_marx(channels, dead_time, rep_rate)
+
+    def marx_one(self, pulse_length: float, dead_time: float, rep_rate: float, channel: int):
+        """
+
+        :param pulse_length:
+        :param dead_time:
+        :param rep_rate:
+        :param channel:
+        :return:
+        """
+        assert 0 < channel < NUM_CHANNELS, 'Incorrect channel number!'
+        channels = []
+        start = rep_rate - pulse_length
+        stop = rep_rate
+        for i in range(1, NUM_CHANNELS + 1):
+            if i == channel:
+                channels.append([start, stop])  # disable outputs
+            else:
+                channels.append([rep_rate + 1, rep_rate + 1])  # disable
         self._make_marx(channels, dead_time, rep_rate)
