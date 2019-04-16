@@ -24,8 +24,8 @@ class JvoAxiioDriver:
                  bitfile='/home/xilinx/pynq/overlays/jvo6-axiio/axiio1_19.bit',
                  axiinput='jvo_axiinput_0'):
         try:
-            overlay = Overlay(bitfile)
-            self.io = getattr(overlay, axiinput)
+            self.overlay = Overlay(bitfile)
+            self.io = getattr(self.overlay, axiinput)
         except NameError:
             print('Running without PYNQ!')
             pass
@@ -245,7 +245,7 @@ class JvoAxiioDriver:
         if hasattr(self, 'io'):  # if running with pynq
             self.set_io_init(str(io_init) * 20)
             self.set_rep_rate_cycles(rep_rate_cycles)
-            assert len(channel_list) == NUM_OUTPUT, 'Not all channels are defined!'
+            assert len(channel_list) == NUM_CHANNELS, 'Not all channels are defined!'
             for i, channel in enumerate(channel_list):
                 self.set_output_cycles('{}a'.format(i + 1), channel[0], channel[1])
                 self.set_output_cycles('{}b'.format(i + 1), charge_start, charge_stop)
