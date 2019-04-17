@@ -63,6 +63,9 @@ class JvoAxiioDriver:
         :param num_cycles:
         :return:
         """
+        if log2(num_cycles) > 32:
+            max_reprate = (2 ** 32 - 1) * CLOCK_PERIOD
+            raise Exception('Number too large, maximum length is {} seconds.'.format(max_reprate))
         self.rep_rate_cycles = num_cycles
         self.write_reg(REG_MAX_COUNT, num_cycles)
 
@@ -83,26 +86,26 @@ class JvoAxiioDriver:
             raise Exception('String should consist of only 1 and 0.')
         self.write_reg(REG_IO_INIT, initial_num)
 
-    def check_output_cycles(self, start: int, stop: int, rep_rate: int = 0):
+    def check_output_cycles(self, start: int, stop: int, rep_rate_cycles: int = 0):
         """
         Check if a number of cycles for an output is a valid value
 
         :param start: num cycles start time
         :param stop: num cycles stop time
-        :param rep_rate: num cycles in reprate
+        :param rep_rate_cycles: num cycles in reprate
         :return:
         """
-        if rep_rate < 0:
+        if rep_rate_cycles <= 0:
             if self.rep_rate_cycles > 0:
-                rep_rate = self.rep_rate_cycles
+                rep_rate_cycles = self.rep_rate_cycles
             else:
                 raise Exception('Invalid rep rate!')
-        if stop > rep_rate and start > rep_rate:
+        if (stop > rep_rate_cycles and start > rep_rate_cycles) or (stop < 0 and start < 0):
             return False
         else:
-            if start > rep_rate:
+            if start > rep_rate_cycles:
                 raise Exception('Start number is larger than rep. rate. This is not possible.')
-            if stop > rep_rate:
+            if stop > rep_rate_cycles:
                 raise Exception('Stop number is larger than rep. rate. This is not possible.')
             if stop < start:
                 raise Exception('Stop number should be larger than start number.')
@@ -115,16 +118,16 @@ class JvoAxiioDriver:
         Set start and stop time of output by number of cycles
 
         :param output: number of output as str 1a, 1b, 2a etc.
-        :param start:
-        :param stop:
+        :param start: start of pulse in num cycles
+        :param stop: stop of pulse in num cycles
         :return:
         """
         io_num = 4 * (int(output[:-1]) - 1)  # all but last char should be numeric
         io_offset = 2 if output[-1] == 'b' else 0
         if not self.check_output_cycles(start, stop):
             print('output {} is disabled'.format(output))
-        self.write_reg(io_num + io_offset, stop)
-        self.write_reg(io_num + io_offset + 1, start)
+        self.write_reg(io_num + io_offset, start)
+        self.write_reg(io_num + io_offset + 1, stop)
 
     def set_output_seconds(self, output: str, start: float, stop: float):
         """
@@ -181,71 +184,89 @@ class JvoAxiioDriver:
         plot_list = []
         table_list = []
         channel_list = []
-        io_init = 0  # initial value of all signals
+        io_init = [1] * NUM_OUTPUT  # initial value of all signals, first 10 are signals
         first = rep_rate
         min_width = rep_rate
+
         if len(channels) > NUM_CHANNELS:
             raise Exception('{} channels defined, where {} is max'.format(len(channels), NUM_CHANNELS))
+        if len(channels) != NUM_CHANNELS:
+            raise Exception('{} channels defined, but {} should be defined.'.format(len(channels), NUM_CHANNELS))
+
         # check values and find charge bounds
         rep_rate_cycles = round(rep_rate / CLOCK_PERIOD)
+        if log2(rep_rate_cycles) >= 32:
+            max_reprate = (2 ** 32 - 3) * CLOCK_PERIOD
+            raise Exception('Number too large, maximum length is {} seconds.'.format(max_reprate))
         dead_time_cycles = round(dead_time / CLOCK_PERIOD)
         if dead_time < DEAD_TIME_MIN:
             raise Exception('Dead time {} is shorter than minimum of {}'.format(dead_time, DEAD_TIME_MIN))
 
+        assert len(channels) == NUM_CHANNELS
         for i, output in enumerate(channels):
-            if output[0] <= rep_rate and output[1] <= rep_rate:  # not disabled
+            if (output[0] <= rep_rate and output[1] <= rep_rate) or \
+                    (output[0] < 0 and output[1] < 0):  # not disabled
                 width = output[1] - output[0]
                 if width < min_width:
                     min_width = width
                 if min_width < CLOCK_PERIOD:
-                    raise Exception('Min width of {} is smaller than clock period {} for channel {}'.format(min_width, CLOCK_PERIOD, i+1))
+                    raise Exception('Min width of {} is smaller than clock period {} for channel {}'.format(min_width, CLOCK_PERIOD, i + 1))
                 if output[0] < first:
                     first = output[0]
                 if output[1] > rep_rate and output[0] < rep_rate:  # only if channel is not disabled.
-                    raise Exception('Last value of channel {} is larger than rep_rate {}'.format(i+1, rep_rate))
+                    raise Exception('Last value of channel {} is larger than rep_rate {}'.format(i + 1, rep_rate))
                 if output[0] < rep_rate / 2:
-                    raise Exception('First value of channel {} is before half cycle, this gives too little time to charge'.format(i+1))
+                    raise Exception('First value of channel {} is before half cycle, this gives too little time to charge'.format(i + 1))
                 if output[1] < output[0]:
-                    raise Exception('Start cannot be after end time for channel {}'.format(i+1))
+                    raise Exception('Start cannot be after end time for channel {}'.format(i + 1))
 
-            num_cycles_start = round(output[0] / CLOCK_PERIOD)
-            num_cycles_stop = round(output[1] / CLOCK_PERIOD)
+                num_cycles_start = round(output[0] / CLOCK_PERIOD)
+                num_cycles_stop = round(output[1] / CLOCK_PERIOD)
+            else:  # disabled output
+                num_cycles_start = rep_rate_cycles + 2  # disabled output has too high number
+                num_cycles_stop = rep_rate_cycles + 2  # disabled output has too high number
+
             table_list.append(['Channel_{}a'.format(i + 1), num_cycles_start, num_cycles_stop])
             channel_list.append([num_cycles_start, num_cycles_stop])
+            # plot is inverted from the output waveform, because HFBR inverts signal once.
             if not self.check_output_cycles(num_cycles_start, num_cycles_stop, rep_rate_cycles):
-                print('output {} is disabled'.format(i + 1))
-                plot_list.append([[0, rep_rate_cycles], [io_init, io_init]])
-
+                io_init[i] = 1  # disabled output
+                plot_list.append([[0, rep_rate_cycles], [not io_init[i], not io_init[i]]])
             else:
-                plot_list.append([[0, output[0], output[1], rep_rate], [io_init, io_init, not io_init, io_init]])
+                plot_list.append([[0, output[0], output[1], rep_rate], [not io_init[i], not io_init[i], io_init[i], not io_init[i]]])
 
         # plot channels
-        fig, axs = plt.subplots(len(plot_list)+1, 1, sharex=True, sharey=True)
+        fig, axs = plt.subplots(len(plot_list) + 1, 1, sharex=True, sharey=True)
         for i, plot in enumerate(plot_list):
-            axs[i].step(plot[0], plot[1])
-            axs[i].set_ylabel('{}a'.format(i+1))
+            axs[i].step(plot[0], plot[1], linewidth=2)
+            axs[i].set_ylabel('{}a'.format(i + 1))
 
         # charge pulse
         first_cycles = round(first / CLOCK_PERIOD)
-        print(first_cycles, dead_time_cycles)
         charge_start = dead_time_cycles
         charge_stop = first_cycles - dead_time_cycles
         table_list.append(['Charge', charge_start, charge_stop])
 
-        # plot charge
-        axs[len(plot_list)].step([0, dead_time, first-dead_time, rep_rate], [io_init, io_init, not io_init, io_init])
+        # plot charge.
+        # io_init[NUM_CHANNELS] will be the first charge output.
+        axs[len(plot_list)].step(
+            [0, dead_time, first - dead_time, rep_rate],
+            [not io_init[NUM_CHANNELS], not io_init[NUM_CHANNELS], io_init[NUM_CHANNELS], not io_init[NUM_CHANNELS]], linewidth=2)
         axs[len(plot_list)].set_ylabel('crg')
-
         # set plot
-        plt.xlim([first-2*dead_time, rep_rate])
-        fig.show()
+        plt.xlim([first - 2 * dead_time, rep_rate])
 
         pprint(table_list)
         # apply
         if hasattr(self, 'io'):  # if running with pynq
-            self.set_io_init(str(io_init) * 20)
+            io_init = ''.join([str(i) for i in io_init])  # convert to string
+            # make sure all charge channels (second half) are init at zero.
+            assert io_init[NUM_CHANNELS:NUM_OUTPUT] == '1' * NUM_CHANNELS, 'Charge init not correct!'
+            # write init values to axi
+            self.set_io_init(io_init)
+            # write reprate to axi
             self.set_rep_rate_cycles(rep_rate_cycles)
-            assert len(channel_list) == NUM_CHANNELS, 'Not all channels are defined!'
+            # write channel start/stop to axi.
             for i, channel in enumerate(channel_list):
                 self.set_output_cycles('{}a'.format(i + 1), channel[0], channel[1])
                 self.set_output_cycles('{}b'.format(i + 1), charge_start, charge_stop)
@@ -279,12 +300,12 @@ class JvoAxiioDriver:
         change = shortest_length / 2
         for i in range(0, num_channels):
             j = num_channels - i
-            start = rep_rate - change * i - shortest_length * num_channels
-            stop = rep_rate - change * (j - 1)
+            start = rep_rate - change * (j-1) - shortest_length - 2*i*change
+            stop = rep_rate - change * (j-1)
             print(i, j, start, stop)
             channels.append([start, stop])
         for i in range(num_channels, NUM_CHANNELS):
-            channels.append([rep_rate*2, rep_rate*2])  # disable outputs
+            channels.append([rep_rate * 2, rep_rate * 2])  # disable outputs
         self._make_marx(channels, dead_time, rep_rate)
 
     def marx_one(self, pulse_length: float, dead_time: float, rep_rate: float, channel: int):
@@ -302,7 +323,7 @@ class JvoAxiioDriver:
         stop = rep_rate
         for i in range(1, NUM_CHANNELS + 1):
             if i == channel:
-                channels.append([start, stop])  # disable outputs
+                channels.append([start, stop])  # enable
             else:
                 channels.append([rep_rate + 1, rep_rate + 1])  # disable
         self._make_marx(channels, dead_time, rep_rate)
