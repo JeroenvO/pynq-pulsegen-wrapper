@@ -42,12 +42,12 @@ class JvoAxiioDriver:
                                 span = re.search(r'[0-9]{2,5}', line).span()
                                 l = line[span[0]:span[1]]
                                 # print(l)
-                                clocks.append(int(l)*1e6)  # convert MHz to Hz
+                                clocks.append(int(l) * 1e6)  # convert MHz to Hz
                     if not all([clocks[0] == clocks[i] for i in range(len(clocks))]):
                         raise Exception('Different values for clock speed found in TCL file!')
                     # set clock period.
-                    self.clock_period = float(1/clocks[0])
-                    print('Clock period set to {}ns'.format(self.clock_period*1e9))
+                    self.clock_period = float(1 / clocks[0])
+                    print('Clock period set to {}ns'.format(self.clock_period * 1e9))
                 else:
                     print('TCL file ({}) not found!'.format(tcl_file))
             except NameError:
@@ -214,9 +214,9 @@ class JvoMarxGenerator(JvoAxiioDriver):
         :return:
         """
         assert NUM_OUTPUT / 2 == NUM_CHANNELS, 'Each channel should have 2 outputs.'
-        plot_list = []
-        table_list = []
-        channel_list = []
+        plot_list = [[[], []]] * NUM_CHANNELS
+        table_list = [[]] * (NUM_CHANNELS + 1)
+        channel_list = [[]] * NUM_CHANNELS
         io_init = [1] * NUM_OUTPUT  # initial value of all signals, first 10 are signals
         first = rep_rate
         min_width = rep_rate
@@ -259,14 +259,14 @@ class JvoMarxGenerator(JvoAxiioDriver):
                 num_cycles_start = rep_rate_cycles + 2  # disabled output has too high number
                 num_cycles_stop = rep_rate_cycles + 2  # disabled output has too high number
 
-            table_list.append(['Channel_{}a'.format(i + 1), num_cycles_start, num_cycles_stop])
-            channel_list.append([num_cycles_start, num_cycles_stop])
+            table_list[i] = ['Channel_{}a'.format(i + 1), num_cycles_start, num_cycles_stop]
+            channel_list[i] = [num_cycles_start, num_cycles_stop]
             # plot is inverted from the output waveform, because HFBR inverts signal once.
             if not self.check_output_cycles(num_cycles_start, num_cycles_stop, rep_rate_cycles):
                 io_init[i] = 1  # disabled output
-                plot_list.append([[0, rep_rate_cycles], [not io_init[i], not io_init[i]]])
+                plot_list[i] = [[0, rep_rate_cycles], [not io_init[i], not io_init[i]]]
             else:
-                plot_list.append([[0, output[0], output[1], rep_rate], [not io_init[i], not io_init[i], io_init[i], not io_init[i]]])
+                plot_list[i] = [[0, output[0], output[1], rep_rate], [not io_init[i], not io_init[i], io_init[i], not io_init[i]]]
 
         # plot channels
         fig, axs = plt.subplots(len(plot_list) + 1, 1, sharex=True, sharey=True)
@@ -278,7 +278,7 @@ class JvoMarxGenerator(JvoAxiioDriver):
         first_cycles = round(first / self.clock_period)
         charge_start = dead_time_cycles
         charge_stop = first_cycles - dead_time_cycles
-        table_list.append(['Charge', charge_start, charge_stop])
+        table_list[NUM_CHANNELS] = ['Charge', charge_start, charge_stop]
 
         # plot charge.
         # io_init[NUM_CHANNELS] will be the first charge output.
@@ -314,31 +314,33 @@ class JvoMarxGenerator(JvoAxiioDriver):
         :param rep_rate:
         :return:
         """
-        channels = []
+        channels = [[]] * NUM_CHANNELS
         for i in range(0, NUM_CHANNELS):
-            channels.append([rep_rate - pulse_length, rep_rate])
+            channels[i] = [rep_rate - pulse_length, rep_rate]
         self._make_marx(channels, dead_time, rep_rate)
 
-    def marx_delta(self, shortest_length: float, dead_time: float, rep_rate: float, num_channels: int = NUM_CHANNELS):
+    def marx_delta(self, shortest_length: float, dead_time: float, rep_rate: float, num_channels: int = NUM_CHANNELS, change: float = None):
         """
         Make delta shaped wave
 
         :param shortest_length:
         :param dead_time:
         :param rep_rate:
-        :param num_channels:
+        :param num_channels: number of channels to use. Starts at 1
+        :param change: Amount of change in each pulse (pos and neg). Defaults to half pulse length
         :return:
         """
-        channels = []
-        change = shortest_length / 2
+        channels = [[]] * NUM_CHANNELS
+        if not change:
+            change = shortest_length / 2
         for i in range(0, num_channels):
             j = num_channels - i
             start = rep_rate - change * (j - 1) - shortest_length - 2 * i * change
             stop = rep_rate - change * (j - 1)
-            print(i, j, start, stop)
-            channels.append([start, stop])
+            # print(i, j, start, stop)
+            channels[i] = [start, stop]
         for i in range(num_channels, NUM_CHANNELS):
-            channels.append([rep_rate * 2, rep_rate * 2])  # disable outputs
+            channels[i] = [rep_rate + 2, rep_rate + 2]  # disable outputs
         self._make_marx(channels, dead_time, rep_rate)
 
     def marx_one(self, pulse_length: float, dead_time: float, rep_rate: float, channel: int):
@@ -351,12 +353,33 @@ class JvoMarxGenerator(JvoAxiioDriver):
         :return:
         """
         assert 0 < channel < NUM_CHANNELS, 'Incorrect channel number!'
-        channels = []
+        channels = [[]] * NUM_CHANNELS
         start = rep_rate - pulse_length
         stop = rep_rate
         for i in range(1, NUM_CHANNELS + 1):
             if i == channel:
-                channels.append([start, stop])  # enable
+                channels[i] = [start, stop]  # enable
             else:
-                channels.append([rep_rate + 1, rep_rate + 1])  # disable
+                channels[i] = [rep_rate + 2, rep_rate + 2]  # disable
+        self._make_marx(channels, dead_time, rep_rate)
+
+    def marx_sequence(self, pulse_length: float, dead_time: float, rep_rate: float, num_channels: int = NUM_CHANNELS):
+        """
+
+        :param pulse_length:
+        :param dead_time:
+        :param rep_rate:
+        :param channel:
+        :return:
+        """
+        channels = [[]] * NUM_CHANNELS
+        time_between = pulse_length
+        for i in range(0, num_channels):
+            j = num_channels - i
+            start = rep_rate - time_between * (j - 1) - pulse_length * (j)
+            stop = rep_rate - time_between * (j - 1) - pulse_length * (j - 1)
+            # print(i, j, start, stop)
+            channels[i] = [start, stop]
+        for i in range(num_channels, NUM_CHANNELS):
+            channels[i] = [rep_rate * 2, rep_rate * 2]  # disable outputs
         self._make_marx(channels, dead_time, rep_rate)
