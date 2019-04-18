@@ -363,17 +363,19 @@ class JvoMarxGenerator(JvoAxiioDriver):
                 channels[i] = [rep_rate + 2, rep_rate + 2]  # disable
         self._make_marx(channels, dead_time, rep_rate)
 
-    def marx_sequence(self, pulse_length: float, dead_time: float, rep_rate: float, num_channels: int = NUM_CHANNELS):
+    def marx_sequence(self, pulse_length: float, dead_time: float, rep_rate: float, num_channels: int = NUM_CHANNELS, time_between: float = None):
         """
 
         :param pulse_length:
         :param dead_time:
         :param rep_rate:
         :param channel:
+        :param time_between: time between two pulses of the sequence. Defaults to pulselength
         :return:
         """
         channels = [[]] * NUM_CHANNELS
-        time_between = pulse_length
+        if not time_between:
+            time_between = pulse_length
         for i in range(0, num_channels):
             j = num_channels - i
             start = rep_rate - time_between * (j - 1) - pulse_length * (j)
