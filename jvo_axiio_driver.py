@@ -3,6 +3,8 @@ from math import log2
 
 from matplotlib import pyplot as plt
 from pprint import pprint
+import os
+import re
 
 try:
     from pynq import Overlay
@@ -13,7 +15,7 @@ except ImportError:
 REG_MAX_COUNT = 41
 REG_IO_INIT = 40
 ADDR_OFFSET = 4
-CLOCK_PERIOD = 8e-9
+CLOCK_PERIOD_DEFAULT = 8e-9
 NUM_OUTPUT = 20  # number of used IO ports
 NUM_CHANNELS = 10
 DEAD_TIME_MIN = 100e-9
@@ -21,13 +23,39 @@ DEAD_TIME_MIN = 100e-9
 
 class JvoAxiioDriver:
     def __init__(self,
-                 bitfile='/home/xilinx/pynq/overlays/jvo6-axiio/axiio1_19.bit',
+                 bit_file='/home/xilinx/pynq/overlays/jvo6-axiio/axiio1_19.bit',
                  axiinput='jvo_axiinput_0'):
-        try:
-            self.overlay = Overlay(bitfile)
-            self.io = getattr(self.overlay, axiinput)
-        except NameError:
-            print('Running without PYNQ!')
+        self.clock_period = CLOCK_PERIOD_DEFAULT
+        if os.path.exists(bit_file):
+            self.overlay = Overlay(bit_file)
+            try:
+                self.io = getattr(self.overlay, axiinput)
+                # try to read clock freq from tcl file
+                tcl_file = bit_file[:-3] + 'tcl'
+                if os.path.exists(tcl_file):
+                    clocks = []
+                    with open(tcl_file) as f:
+                        for line in f:
+                            # these config lines contain a reference to the clock frequency
+                            if re.search(r'CONFIG\.PCW_FPGA0_PERIPHERAL_FREQMHZ', line) or \
+                                    re.search(r'CONFIG\.PCW_ACT_FPGA0_PERIPHERAL_FREQMHZ', line):
+                                span = re.search(r'[0-9]{2,5}', line).span()
+                                l = line[span[0]:span[1]]
+                                # print(l)
+                                clocks.append(int(l)*1e6)  # convert MHz to Hz
+                    if not all([clocks[0] == clocks[i] for i in range(len(clocks))]):
+                        raise Exception('Different values for clock speed found in TCL file!')
+                    # set clock period.
+                    self.clock_period = float(1/clocks[0])
+                    print('Clock period set to {}ns'.format(self.clock_period*1e9))
+                else:
+                    print('TCL file ({}) not found!'.format(tcl_file))
+            except NameError:
+                self.io = None
+                print('IO module ({}) not found in bitfile!'.format(axiinput))
+        else:
+            print('Bitfile not found!')
+            self.overlay = None
             pass
         print('initialization complete!')
         self.rep_rate_cycles = -1
@@ -51,9 +79,9 @@ class JvoAxiioDriver:
         """
         if seconds < 0:
             raise Exception('Value cannot be negative!')
-        num_cycles = round(seconds / CLOCK_PERIOD)
+        num_cycles = round(seconds / self.clock_period)
         if log2(num_cycles) > 32:
-            max_reprate = (2 ** 32 - 1) * CLOCK_PERIOD
+            max_reprate = (2 ** 32 - 1) * self.clock_period
             raise Exception('Number too large, maximum length is {} seconds.'.format(max_reprate))
         self.set_rep_rate_cycles(num_cycles)
 
@@ -64,7 +92,7 @@ class JvoAxiioDriver:
         :return:
         """
         if log2(num_cycles) > 32:
-            max_reprate = (2 ** 32 - 1) * CLOCK_PERIOD
+            max_reprate = (2 ** 32 - 1) * self.clock_period
             raise Exception('Number too large, maximum length is {} seconds.'.format(max_reprate))
         self.rep_rate_cycles = num_cycles
         self.write_reg(REG_MAX_COUNT, num_cycles)
@@ -137,8 +165,8 @@ class JvoAxiioDriver:
         :param stop:
         :return:
         """
-        num_cycles_start = round(start / CLOCK_PERIOD)
-        num_cycles_stop = round(stop / CLOCK_PERIOD)
+        num_cycles_start = round(start / self.clock_period)
+        num_cycles_stop = round(stop / self.clock_period)
         # print('Setting start to {} and stop to {} cycles'.format(num_cycles_start, num_cycles_stop))
         self.set_output_cycles(output, num_cycles_start, num_cycles_stop)
 
@@ -172,6 +200,11 @@ class JvoAxiioDriver:
             self.set_output_seconds('{}a'.format(i + 1), i * time_per_led, seconds)
             self.set_output_seconds('{}b'.format(i + 1), i * time_per_led, seconds)
 
+
+class JvoMarxGenerator(JvoAxiioDriver):
+    def __init__(self, **kwargs):
+        super(self.__class__, self).__init__(**kwargs)
+
     def _make_marx(self, channels: list, dead_time: float, rep_rate: float):
         """
 
@@ -194,11 +227,11 @@ class JvoAxiioDriver:
             raise Exception('{} channels defined, but {} should be defined.'.format(len(channels), NUM_CHANNELS))
 
         # check values and find charge bounds
-        rep_rate_cycles = round(rep_rate / CLOCK_PERIOD)
+        rep_rate_cycles = round(rep_rate / self.clock_period)
         if log2(rep_rate_cycles) >= 32:
-            max_reprate = (2 ** 32 - 3) * CLOCK_PERIOD
+            max_reprate = (2 ** 32 - 3) * self.clock_period
             raise Exception('Number too large, maximum length is {} seconds.'.format(max_reprate))
-        dead_time_cycles = round(dead_time / CLOCK_PERIOD)
+        dead_time_cycles = round(dead_time / self.clock_period)
         if dead_time < DEAD_TIME_MIN:
             raise Exception('Dead time {} is shorter than minimum of {}'.format(dead_time, DEAD_TIME_MIN))
 
@@ -209,8 +242,8 @@ class JvoAxiioDriver:
                 width = output[1] - output[0]
                 if width < min_width:
                     min_width = width
-                if min_width < CLOCK_PERIOD:
-                    raise Exception('Min width of {} is smaller than clock period {} for channel {}'.format(min_width, CLOCK_PERIOD, i + 1))
+                if min_width < self.clock_period:
+                    raise Exception('Min width of {} is smaller than clock period {} for channel {}'.format(min_width, self.clock_period, i + 1))
                 if output[0] < first:
                     first = output[0]
                 if output[1] > rep_rate and output[0] < rep_rate:  # only if channel is not disabled.
@@ -220,8 +253,8 @@ class JvoAxiioDriver:
                 if output[1] < output[0]:
                     raise Exception('Start cannot be after end time for channel {}'.format(i + 1))
 
-                num_cycles_start = round(output[0] / CLOCK_PERIOD)
-                num_cycles_stop = round(output[1] / CLOCK_PERIOD)
+                num_cycles_start = round(output[0] / self.clock_period)
+                num_cycles_stop = round(output[1] / self.clock_period)
             else:  # disabled output
                 num_cycles_start = rep_rate_cycles + 2  # disabled output has too high number
                 num_cycles_stop = rep_rate_cycles + 2  # disabled output has too high number
@@ -242,7 +275,7 @@ class JvoAxiioDriver:
             axs[i].set_ylabel('{}a'.format(i + 1))
 
         # charge pulse
-        first_cycles = round(first / CLOCK_PERIOD)
+        first_cycles = round(first / self.clock_period)
         charge_start = dead_time_cycles
         charge_stop = first_cycles - dead_time_cycles
         table_list.append(['Charge', charge_start, charge_stop])
@@ -300,8 +333,8 @@ class JvoAxiioDriver:
         change = shortest_length / 2
         for i in range(0, num_channels):
             j = num_channels - i
-            start = rep_rate - change * (j-1) - shortest_length - 2*i*change
-            stop = rep_rate - change * (j-1)
+            start = rep_rate - change * (j - 1) - shortest_length - 2 * i * change
+            stop = rep_rate - change * (j - 1)
             print(i, j, start, stop)
             channels.append([start, stop])
         for i in range(num_channels, NUM_CHANNELS):
