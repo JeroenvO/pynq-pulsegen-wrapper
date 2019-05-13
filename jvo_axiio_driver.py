@@ -305,18 +305,34 @@ class JvoMarxGenerator(JvoAxiioDriver):
                 self.set_output_cycles('{}b'.format(i + 1), charge_start, charge_stop)
             print('Apply finished!')
 
-    def marx_sync(self, pulse_length: float, dead_time: float, rep_rate: float):
+    def marx_sync(self, pulse_length: float, dead_time: float, rep_rate: float, num_channels: int = NUM_CHANNELS, delays_begin: list = None, delays_end: list = None):
         """
         10-stage solid state marx generator control with pulse signals on 'a' and charge signals on 'b'
 
         :param pulse_length:
-        :param dead_time:
+        :param dead_time: deadtime between charging and pulsing.
         :param rep_rate:
+        :param num_channels: number of channels used. Others will be disabled.
+        :param delays_begin: delay at begin of pulse, start pulse earlier than others.
+        :param delays_end: delay at end of pulse, to stop pulse earlier than others
         :return:
         """
+        if delays_begin:
+            assert len(delays_begin) == num_channels, 'Number of delays (begin) ({}) is not equal to number of channels ({})!'.format(len(delays_begin), num_channels)
+            assert all([x <= 0 for x in delays_begin]), 'Only negative delays are allowed!'
+        else:
+            delays_begin = [0] * num_channels
+        if delays_end:
+            assert len(delays_end) == num_channels, 'Number of delays (end) ({}) is not equal to number of channels ({})!'.format(len(delays_end), num_channels)
+            assert all([x <= 0 for x in delays_end]), 'Only negative delays are allowed!'
+        else:
+            delays_end = delays_begin
         channels = [[]] * NUM_CHANNELS
-        for i in range(0, NUM_CHANNELS):
-            channels[i] = [rep_rate - pulse_length, rep_rate]
+        for i in range(0, num_channels):
+            channels[i] = [rep_rate - pulse_length + delays_begin[i], rep_rate+delays_end[i]]
+        for i in range(num_channels, NUM_CHANNELS):
+            channels[i] = [rep_rate + 2, rep_rate + 2]  # disable outputs
+
         self._make_marx(channels, dead_time, rep_rate)
 
     def marx_delta(self, shortest_length: float, dead_time: float, rep_rate: float, num_channels: int = NUM_CHANNELS, change: float = None):
@@ -352,11 +368,12 @@ class JvoMarxGenerator(JvoAxiioDriver):
         :param channel:
         :return:
         """
+        channel = channel - 1  # convert to index nr.
         assert 0 < channel < NUM_CHANNELS, 'Incorrect channel number!'
         channels = [[]] * NUM_CHANNELS
         start = rep_rate - pulse_length
         stop = rep_rate
-        for i in range(1, NUM_CHANNELS + 1):
+        for i in range(0, NUM_CHANNELS):
             if i == channel:
                 channels[i] = [start, stop]  # enable
             else:
